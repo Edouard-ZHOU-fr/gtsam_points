@@ -66,15 +66,20 @@ void IntegratedVGICPDerivatives::touch_points() {
   }
 
   auto target_ = const_cast<GaussianVoxelMapGPU*>(target.get());
-  target_->touch(stream);
+  bool reloaded = target_->touch(stream);
 
   auto source_gpu_const = dynamic_cast<const PointCloudGPU*>(source.get());
-  if (!source_gpu_const) {
-    return;
+  if (source_gpu_const) {
+    auto source_gpu = const_cast<PointCloudGPU*>(source_gpu_const);
+    reloaded |= source_gpu->touch(stream);
   }
 
-  auto source_gpu = const_cast<PointCloudGPU*>(source_gpu_const);
-  source_gpu->touch(stream);
+  // Target/source are shared among factors running on different streams. The data are reloaded on this factor's stream
+  // and their pointers become non-null immediately, so another factor issued right after this one would access them
+  // before the allocation/upload completes (cudaErrorIllegalAddress). Wait for the reload to finish.
+  if (reloaded) {
+    check_error << cudaStreamSynchronize(stream);
+  }
 }
 
 LinearizedSystem6 IntegratedVGICPDerivatives::linearize(const Eigen::Isometry3f& x) {
